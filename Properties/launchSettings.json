@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "MqttPublisher": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker"
+    }
+  }
+}
