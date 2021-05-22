@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <AssemblyName>MqttPublisher</AssemblyName>
+    <RootNamespace>OpcUaPubSub</RootNamespace>
+    <StartupObject>OpcUaPubSub.Program</StartupObject>
+    <PackageId>MqttPublisher</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="Mqtt.Publisher.Config.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Mqtt.Publisher.Config.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="M2MqttDotnetCore" Version="1.1.0" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.4.366.38" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Debug|netcoreapp2.0|AnyCPU'">
+    <OutputPath>$(SolutionDir)\build\bin\NetCore\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(TargetFramework)|$(Platform)'=='Release|netcoreapp2.0|AnyCPU'">
+    <OutputPath>$(SolutionDir)\build\bin\NetCore\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+</Project>
