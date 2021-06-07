@@ -73,7 +73,7 @@ namespace OpcUaPubSub
             }
 
             // load complex type system
-            var complexTypeSystem = new ComplexTypeSystem(session);
+            ComplexTypeSystem complexTypeSystem = new ComplexTypeSystem(session);
 
             // send data for a minute, every second
             for (int i = 0; i < 60; i++)
