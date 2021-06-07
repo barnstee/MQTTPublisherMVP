@@ -1,5 +1,6 @@
 ﻿using Opc.Ua;
 using Opc.Ua.Client;
+using Opc.Ua.Client.ComplexTypes;
 using Opc.Ua.Configuration;
 using System;
 using System.Net.Security;
@@ -58,7 +59,8 @@ namespace OpcUaPubSub
             }
 
             // find endpoint on a local OPC UA server
-            EndpointDescription endpointDescription = CoreClientUtils.SelectEndpoint("opc.tcp://localhost:61210", false);
+            string serverEndpoint = "opc.tcp://localhost:50000"; // run this sample OPC UA server locally via: docker run -p 50000:50000 mcr.microsoft.com/iotedge/opc-plc --aa --ctb
+            EndpointDescription endpointDescription = CoreClientUtils.SelectEndpoint(serverEndpoint, false);
             EndpointConfiguration endpointConfiguration = EndpointConfiguration.Create(app.ApplicationConfiguration);
             ConfiguredEndpoint endpoint = new ConfiguredEndpoint(null, endpointDescription, endpointConfiguration);
 
@@ -70,14 +72,23 @@ namespace OpcUaPubSub
                 return;
             }
 
+            // load complex type system
+            var complexTypeSystem = new ComplexTypeSystem(session);
+
             // send data for a minute, every second
             for (int i = 0; i < 60; i++)
             {
                 int publishingInterval = 1000;
 
-                // read a variable node from the OPC UA server (for example the current time)
-                DataValue serverTime = session.ReadValue(Variables.Server_ServerStatus_CurrentTime);
-                VariableNode node = (VariableNode)session.ReadNode(Variables.Server_ServerStatus_CurrentTime);
+                // read a variable node from the OPC UA server (for example a variable node based on a complex type, contained in the sample OPC PLC provided by Microsoft)
+                ExpandedNodeId nodeID = ExpandedNodeId.Parse("nsu=http://microsoft.com/Opc/OpcPlc/Boiler;i=15013");
+                VariableNode node = (VariableNode)session.ReadNode(ExpandedNodeId.ToNodeId(nodeID, session.NamespaceUris));
+
+                ExpandedNodeId nodeTypeId = node.DataType;
+                complexTypeSystem.LoadType(nodeTypeId).GetAwaiter().GetResult();
+
+                // now that we have loaded the complex type, we can read the value
+                DataValue value = session.ReadValue(ExpandedNodeId.ToNodeId(nodeID, session.NamespaceUris));
 
                 // OPC UA PubSub JSON-encode data read
                 JsonEncoder encoder = new JsonEncoder(session.MessageContext, true);
@@ -88,7 +99,7 @@ namespace OpcUaPubSub
                 encoder.PushStructure("");
                 encoder.WriteString("DataSetWriterId", endpointDescription.Server.ApplicationUri + ":" + publishingInterval.ToString());
                 encoder.PushStructure("Payload");
-                encoder.WriteDataValue(node.DisplayName.ToString(), serverTime);
+                encoder.WriteDataValue(node.DisplayName.ToString(), value);
                 encoder.PopStructure();
                 encoder.PopStructure();
                 encoder.PopArray();
