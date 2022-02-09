@@ -43,7 +43,6 @@ namespace OpcUaPubSub
             app.ApplicationConfiguration.CertificateValidator = new CertificateValidator();
             app.ApplicationConfiguration.CertificateValidator.CertificateValidation += new CertificateValidationEventHandler(OPCUAServerCertificateValidationCallback);
 
-
             string brokerName = "<TODO: Enter your Azure IoT Hub hostname in here, i.e. something.azure-devices.net";
             string clientName = "<TODO: Enter your Azure IoT device ID in here>";
             string sharedKey = "<TODO: Enter your Azure IoT device's primary key in here>";
@@ -210,7 +209,7 @@ namespace OpcUaPubSub
             }
         }
 
-        /// Parses status from packet properties
+        // parses status from packet properties
         private static int? GetStatus(List<MqttUserProperty> properties)
         {
             var status = properties.FirstOrDefault(up => up.Name == "status");
@@ -222,7 +221,7 @@ namespace OpcUaPubSub
             return int.Parse(status.Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
         }
 
-        /// Handles all incoming messages
+        // handles all incoming messages
         private static void HandleMessageAsync(MqttApplicationMessageReceivedEventArgs args)
         {
             var msg = args.ApplicationMessage;
@@ -240,7 +239,7 @@ namespace OpcUaPubSub
             }
         }
 
-        /// Handles direct method calls
+        // handles direct method calls
         private static MqttApplicationMessage HandleMethod(MqttApplicationMessage message)
         {
             Console.WriteLine($"Received method call:\ntopic:{message.Topic}\npayload as a string: {Encoding.UTF8.GetString(message.Payload)}");
