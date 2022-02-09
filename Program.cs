@@ -1,21 +1,31 @@
-﻿using Opc.Ua;
+﻿using MQTTnet;
+using MQTTnet.Adapter;
+using MQTTnet.Client;
+using MQTTnet.Client.Connecting;
+using MQTTnet.Client.Options;
+using MQTTnet.Client.Publishing;
+using MQTTnet.Client.Subscribing;
+using MQTTnet.Packets;
+using MQTTnet.Protocol;
+using Opc.Ua;
 using Opc.Ua.Client;
 using Opc.Ua.Client.ComplexTypes;
 using Opc.Ua.Configuration;
 using System;
-using System.Net.Security;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
-using uPLibrary.Networking.M2Mqtt;
-using uPLibrary.Networking.M2Mqtt.Messages;
 
 namespace OpcUaPubSub
 {
     public class Program
     {
+        private static IMqttClient _client = null;
+
         public static void Main()
         {
             // create OPC UA client app
@@ -27,37 +37,86 @@ namespace OpcUaPubSub
             };
 
             app.LoadApplicationConfiguration(false).GetAwaiter().GetResult();
-
             app.CheckApplicationInstanceCertificate(false, 0).GetAwaiter().GetResult();
 
             // create OPC UA cert validator
             app.ApplicationConfiguration.CertificateValidator = new CertificateValidator();
             app.ApplicationConfiguration.CertificateValidator.CertificateValidation += new CertificateValidationEventHandler(OPCUAServerCertificateValidationCallback);
 
-            // create MQTT client
-            string brokerName = "";
-            string clientName = "";
-            string sharedKey = "";
-            string userName = brokerName + "/" + clientName + "/?api-version=2018-06-30";
-            MqttClient mqttClient = new MqttClient(brokerName, 8883, true, MqttSslProtocols.TLSv1_2, MQTTBrokerCertificateValidationCallback, null);
+
+            string brokerName = "<TODO: Enter your Azure IoT Hub hostname in here, i.e. something.azure-devices.net";
+            string clientName = "<TODO: Enter your Azure IoT device ID in here>";
+            string sharedKey = "<TODO: Enter your Azure IoT device's primary key in here>";
 
             // create SAS token
-            TimeSpan sinceEpoch = DateTime.UtcNow - new DateTime(1970, 1, 1);
-            int week = 60 * 60 * 24 * 7;
-            string expiry = Convert.ToString((int)sinceEpoch.TotalSeconds + week);
-            string stringToSign = HttpUtility.UrlEncode(brokerName + "/devices/" + clientName) + "\n" + expiry;
-            HMACSHA256 hmac = new HMACSHA256(Convert.FromBase64String(sharedKey));
-            string signature = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(stringToSign)));
-            string password = "SharedAccessSignature sr=" + HttpUtility.UrlEncode(brokerName + "/devices/" + clientName) + "&sig=" + HttpUtility.UrlEncode(signature) + "&se=" + expiry;
+            var at = DateTimeOffset.UtcNow;
+            var atString = at.ToUnixTimeMilliseconds().ToString();
+            var expiry = at.AddMinutes(40);
+            var expiryString = expiry.ToUnixTimeMilliseconds().ToString();
+            string toSign = $"{brokerName}\n{clientName}\n{""}\n{atString}\n{expiryString}\n";
+            var hmac = new HMACSHA256(Convert.FromBase64String(sharedKey));
+            var sas = hmac.ComputeHash(Encoding.UTF8.GetBytes(toSign));
 
-            // connect to MQTT broker
-            byte returnCode = mqttClient.Connect(clientName, userName, password);
-            if (returnCode != MqttMsgConnack.CONN_ACCEPTED)
+            // create MQTTv5 client
+            _client = new MqttFactory().CreateMqttClient();
+            _client.UseApplicationMessageReceivedHandler(msg => HandleMessageAsync(msg));
+            var clientOptions = new MqttClientOptionsBuilder()
+                .WithTcpServer(opt => opt.NoDelay = true)
+                .WithClientId(clientName)
+                .WithTcpServer(brokerName, 8883)
+                .WithTls(new MqttClientOptionsBuilderTlsParameters { UseTls = true })
+                .WithProtocolVersion(MQTTnet.Formatter.MqttProtocolVersion.V500)
+                .WithUserProperty("host", brokerName) // normally it is not needed as SNI is added by most TLS implementations.  
+                .WithUserProperty("api-version", "2020-10-01-preview")
+                .WithCommunicationTimeout(TimeSpan.FromSeconds(30))
+                .WithKeepAlivePeriod(TimeSpan.FromSeconds(300))
+                .WithCleanSession(false) // keep existing subscriptions 
+                .WithAuthentication("SAS", sas)
+                .WithUserProperty("sas-at", atString)
+                .WithUserProperty("sas-expiry", expiryString);
+
+            // setup disconnection handling: print out details and allow process to close
+            bool disconnected = false;
+            _client.UseDisconnectedHandler(disconnectArgs =>
             {
-                Console.WriteLine("Connection to MQTT broker failed with " + returnCode.ToString() + "!");
-                return;
-            }
+                Console.WriteLine($"Disconnected: {disconnectArgs.Reason}");
+                disconnected = true;
+            });
 
+            try
+            {
+                var connectResult = _client.ConnectAsync(clientOptions.Build(), CancellationToken.None).GetAwaiter().GetResult();
+                if (connectResult.ResultCode != MqttClientConnectResultCode.Success)
+                {
+                    var status = GetStatus(connectResult.UserProperties)?.ToString("x4");
+                    throw new Exception($"Connect failed. Status: {connectResult.ResultCode}; status: {status}");
+                }
+                
+                var subscribeResult = _client.SubscribeAsync(
+                    new MqttTopicFilter
+                    {
+                        Topic = "$iothub/methods/+",
+                        QualityOfServiceLevel = MqttQualityOfServiceLevel.AtMostOnce
+                    }).GetAwaiter().GetResult();
+
+                // make sure subscriptions were successful
+                if (subscribeResult.Items.Count != 1 || subscribeResult.Items[0].ResultCode != MqttClientSubscribeResultCode.GrantedQoS0)
+                {
+                    throw new ApplicationException("Failed to subscribe");
+                }
+            }
+            catch (MqttConnectingFailedException ex)
+            {
+                Console.WriteLine($"Failed to connect, reason code: {ex.ResultCode}");
+                if (ex.Result?.UserProperties != null)
+                {
+                    foreach (var prop in ex.Result.UserProperties)
+                    {
+                        Console.WriteLine($"{prop.Name}: {prop.Value}");
+                    }
+                }
+            }
+            
             // find endpoint on a local OPC UA server
             string serverEndpoint = "opc.tcp://localhost:50000"; // run this sample OPC UA server locally via: docker run -p 50000:50000 mcr.microsoft.com/iotedge/opc-plc --aa --ctb
             EndpointDescription endpointDescription = CoreClientUtils.SelectEndpoint(serverEndpoint, false);
@@ -76,45 +135,122 @@ namespace OpcUaPubSub
             ComplexTypeSystem complexTypeSystem = new ComplexTypeSystem(session);
 
             // send data for a minute, every second
-            for (int i = 0; i < 60; i++)
+            try
             {
-                int publishingInterval = 1000;
+                int i = 0;
+                while (!disconnected)
+                {
+                    int publishingInterval = 1000;
 
-                // read a variable node from the OPC UA server (for example a variable node based on a complex type, contained in the sample OPC PLC provided by Microsoft)
-                ExpandedNodeId nodeID = ExpandedNodeId.Parse("nsu=http://microsoft.com/Opc/OpcPlc/Boiler;i=15013");
-                VariableNode node = (VariableNode)session.ReadNode(ExpandedNodeId.ToNodeId(nodeID, session.NamespaceUris));
+                    // read a variable node from the OPC UA server (for example a variable node based on a complex type, contained in the sample OPC PLC provided by Microsoft)
+                    ExpandedNodeId nodeID = ExpandedNodeId.Parse("nsu=http://microsoft.com/Opc/OpcPlc/Boiler;i=15013");
+                    VariableNode node = (VariableNode)session.ReadNode(ExpandedNodeId.ToNodeId(nodeID, session.NamespaceUris));
 
-                ExpandedNodeId nodeTypeId = node.DataType;
-                complexTypeSystem.LoadType(nodeTypeId).GetAwaiter().GetResult();
+                    ExpandedNodeId nodeTypeId = node.DataType;
+                    complexTypeSystem.LoadType(nodeTypeId).GetAwaiter().GetResult();
 
-                // now that we have loaded the complex type, we can read the value
-                DataValue value = session.ReadValue(ExpandedNodeId.ToNodeId(nodeID, session.NamespaceUris));
+                    // now that we have loaded the complex type, we can read the value
+                    DataValue value = session.ReadValue(ExpandedNodeId.ToNodeId(nodeID, session.NamespaceUris));
 
-                // OPC UA PubSub JSON-encode data read
-                JsonEncoder encoder = new JsonEncoder(session.MessageContext, true);
-                encoder.WriteString("MessageId", i.ToString());
-                encoder.WriteString("MessageType", "ua-data");
-                encoder.WriteString("PublisherId", app.ApplicationName);
-                encoder.PushArray("Messages");
-                encoder.PushStructure("");
-                encoder.WriteString("DataSetWriterId", endpointDescription.Server.ApplicationUri + ":" + publishingInterval.ToString());
-                encoder.PushStructure("Payload");
-                encoder.WriteDataValue(node.DisplayName.ToString(), value);
-                encoder.PopStructure();
-                encoder.PopStructure();
-                encoder.PopArray();
-                string payload = encoder.CloseAndReturnText();
+                    // OPC UA PubSub JSON-encode data read
+                    JsonEncoder encoder = new JsonEncoder(session.MessageContext, true);
+                    encoder.WriteString("MessageId", i++.ToString());
+                    encoder.WriteString("MessageType", "ua-data");
+                    encoder.WriteString("PublisherId", app.ApplicationName);
+                    encoder.PushArray("Messages");
+                    encoder.PushStructure("");
+                    encoder.WriteString("DataSetWriterId", endpointDescription.Server.ApplicationUri + ":" + publishingInterval.ToString());
+                    encoder.PushStructure("Payload");
+                    encoder.WriteDataValue(node.DisplayName.ToString(), value);
+                    encoder.PopStructure();
+                    encoder.PopStructure();
+                    encoder.PopArray();
+                    string payload = encoder.CloseAndReturnText();
 
-                // send to MQTT broker
-                string topic = "devices/" + clientName + "/messages/events/";
-                ushort result = mqttClient.Publish(topic, Encoding.UTF8.GetBytes(payload), MqttMsgBase.QOS_LEVEL_AT_LEAST_ONCE, false);
+                    // send to MQTTv5 broker
+                    var message = new MqttApplicationMessageBuilder()
+                        .WithAtLeastOnceQoS()
+                        .WithTopic("$iothub/telemetry")
+                        .WithContentType("application/json") // optional: sets `content-type` system property on message
+                        .WithUserProperty("@myProperty", "my value") // optional: adds custom property `myProperty`
+                        .WithUserProperty("creation-time", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString()) // optional: sets `creation-time` system property on message
+                        .WithPayload(Encoding.UTF8.GetBytes(payload))
+                        .Build();
 
-                Task.Delay(publishingInterval).GetAwaiter().GetResult();
+                    var response = _client.PublishAsync(message).GetAwaiter().GetResult();
+                    if (response.ReasonCode != MqttClientPublishReasonCode.Success)
+                    {
+                        throw new Exception($"Failed to send telemetry event. Reason Code: {response.ReasonCode}; Status: {GetStatus(response.UserProperties)?.ToString("x4") ?? "-"}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Sent: " + payload);
+                    }
+
+                    Task.Delay(publishingInterval).GetAwaiter().GetResult();
+                }
+
+                Console.WriteLine("Exciting!");
+
+                session.Close();
+                session.Dispose();
+
+                _client.DisconnectAsync().GetAwaiter().GetResult();
+                _client.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Exception: " + ex.Message);
+
+                session.Close();
+                session.Dispose();
+
+                _client.DisconnectAsync().GetAwaiter().GetResult();
+                _client.Dispose();
+            }
+        }
+
+        /// Parses status from packet properties
+        private static int? GetStatus(List<MqttUserProperty> properties)
+        {
+            var status = properties.FirstOrDefault(up => up.Name == "status");
+            if (status == null)
+            {
+                return null;
             }
 
-            session.Close();
-            session.Dispose();
-            mqttClient.Disconnect();
+            return int.Parse(status.Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+        }
+
+        /// Handles all incoming messages
+        private static void HandleMessageAsync(MqttApplicationMessageReceivedEventArgs args)
+        {
+            var msg = args.ApplicationMessage;
+            if (msg.Topic.StartsWith("$iothub/methods/"))
+            {
+                var fork = Task.Run(async () =>
+                {
+                    var response = HandleMethod(msg);
+                    await _client.PublishAsync(response).ConfigureAwait(false);
+                });
+            }
+            else
+            {
+                Console.WriteLine("Unknown topic received: " + msg.Topic);
+            }
+        }
+
+        /// Handles direct method calls
+        private static MqttApplicationMessage HandleMethod(MqttApplicationMessage message)
+        {
+            Console.WriteLine($"Received method call:\ntopic:{message.Topic}\npayload as a string: {Encoding.UTF8.GetString(message.Payload)}");
+            return new MqttApplicationMessageBuilder()
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtMostOnce)
+                .WithTopic("$iothub/responses")
+                .WithCorrelationData(message.CorrelationData)
+                .WithUserProperty("response-code", "200")
+                .WithPayload("{\"test\":123}")
+                .Build();
         }
 
         private static void OPCUAServerCertificateValidationCallback(CertificateValidator validator, CertificateValidationEventArgs e)
@@ -124,12 +260,6 @@ namespace OpcUaPubSub
             {
                 e.Accept = true;
             }
-        }
-
-        private static bool MQTTBrokerCertificateValidationCallback(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
-        {
-            // always trust the MQTT broker certificate
-            return true;
         }
     }
 }
