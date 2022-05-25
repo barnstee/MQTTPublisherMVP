@@ -12,10 +12,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="energy.csv" />
     <None Remove="Mqtt.Publisher.Config.xml" />
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="energy.csv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Mqtt.Publisher.Config.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
