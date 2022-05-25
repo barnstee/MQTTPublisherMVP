@@ -126,17 +126,16 @@ namespace OpcUaPubSub
                     }
 
                     energyMeter += currentPowerConsumption;
-                    i++;
-
+                    
                     // OPC UA PubSub JSON-encode data read
                     JsonEncoder encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true);
-                    encoder.WriteString("MessageId", i++.ToString());
+                    encoder.WriteString("MessageId", i.ToString());
                     encoder.WriteString("MessageType", "ua-data");
                     encoder.WriteString("PublisherId", "MQTTPublisherMVP");
                     encoder.PushArray("Messages");
                     encoder.PushStructure("");
                     encoder.WriteString("DataSetWriterId", "12345");
-                    encoder.WriteString("Timestamp", String.Format("{0:u}", DateTime.UtcNow));
+                    encoder.WriteString("Timestamp", string.Format("{0:u}", DateTime.UtcNow));
                     encoder.PushStructure("Payload");
                     encoder.WriteVariant("Energy", energyMeter);
                     encoder.PopStructure();
@@ -160,6 +159,8 @@ namespace OpcUaPubSub
 
                     // publish once a second
                     Task.Delay(1000).GetAwaiter().GetResult();
+
+                    i++;
                 }
             }
             catch (Exception ex)
