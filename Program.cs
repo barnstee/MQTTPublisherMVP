@@ -107,6 +107,7 @@ namespace OpcUaPubSub
             {
                 int i = 0;
                 double energyMeter = 0;
+                double currentPowerConsumption = 0;
                 while (true)
                 {
                     if (i == lines.Count)
@@ -115,8 +116,17 @@ namespace OpcUaPubSub
                     }
 
                     // our energy CSV is in 30 second internvals
-                    double currentPowerConsumption = double.Parse(lines[i]) / 30;
+                    try
+                    {
+                        currentPowerConsumption = double.Parse(lines[i]) / 30;
+                    }
+                    catch (Exception)
+                    {
+                        // do nothing
+                    }
+
                     energyMeter += currentPowerConsumption;
+                    i++;
 
                     // OPC UA PubSub JSON-encode data read
                     JsonEncoder encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true);
