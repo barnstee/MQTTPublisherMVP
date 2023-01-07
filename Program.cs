@@ -1,10 +1,8 @@
 ﻿using MQTTnet;
 using MQTTnet.Adapter;
 using MQTTnet.Client;
-using MQTTnet.Client.Connecting;
-using MQTTnet.Client.Options;
-using MQTTnet.Client.Publishing;
 using MQTTnet.Packets;
+using MQTTnet.Protocol;
 using Opc.Ua;
 using System;
 using System.Collections.Generic;
@@ -22,7 +20,7 @@ namespace OpcUaPubSub
     public class Program
     {
         private static IMqttClient _client = null;
-        private static string _clientName = "erich";
+        private static string _clientName = "GE";
 
         public static void Connect()
         {
@@ -34,7 +32,7 @@ namespace OpcUaPubSub
                 _client = null;
             }
 
-            string brokerName = "OSDU.azure-devices.net";
+            string brokerName = "SPS2021.azure-devices.net";
             string sharedKey = "";
             string userName = brokerName + "/" + _clientName + "/?api-version=2018-06-30";
 
@@ -55,23 +53,25 @@ namespace OpcUaPubSub
                 .WithTcpServer(brokerName, 8883)
                 .WithTls(new MqttClientOptionsBuilderTlsParameters { UseTls = true })
                 .WithProtocolVersion(MQTTnet.Formatter.MqttProtocolVersion.V311)
-                .WithCommunicationTimeout(TimeSpan.FromSeconds(10))
+                .WithTimeout(TimeSpan.FromSeconds(10))
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(100))
-                .WithCleanSession(true) // clear existing subscriptions 
+                .WithCleanSession(true) // clear existing subscriptions
                 .WithCredentials(userName, password);
 
             // setup disconnection handling
-            _client.UseDisconnectedHandler(disconnectArgs =>
+            _client.DisconnectedAsync += disconnectArgs =>
             {
                 Console.WriteLine($"Disconnected from MQTT broker: {disconnectArgs.Reason}");
 
-                // wait a 5 seconds, then simply reconnect again, if needed
-                Task.Delay(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
-                if ((_client == null) || !_client.IsConnected)
+                var connectResult = _client.ConnectAsync(clientOptions.Build(), CancellationToken.None).GetAwaiter().GetResult();
+                if (connectResult.ResultCode != MqttClientConnectResultCode.Success)
                 {
-                    Connect();
+                    var status = GetStatus(connectResult.UserProperties)?.ToString("x4");
+                    throw new Exception($"Connection to MQTT broker failed. Status: {connectResult.ResultCode}; status: {status}");
                 }
-            });
+
+                return Task.CompletedTask;
+            };
 
             try
             {
@@ -81,6 +81,8 @@ namespace OpcUaPubSub
                     var status = GetStatus(connectResult.UserProperties)?.ToString("x4");
                     throw new Exception($"Connect failed. Status: {connectResult.ResultCode}; status: {status}");
                 }
+
+                Console.WriteLine("Connected to IoT Hub via MQTT.");
             }
             catch (MqttConnectingFailedException ex)
             {
@@ -96,13 +98,13 @@ namespace OpcUaPubSub
         }
 
         public static void Main()
-        { 
+        {
             // load data
             List<string> lines = File.ReadLines(Path.Combine(Directory.GetCurrentDirectory(), "energy.csv")).ToList();
 
             // connect to broker
             Connect();
-            
+
             try
             {
                 int i = 0;
@@ -126,7 +128,7 @@ namespace OpcUaPubSub
                     }
 
                     energyMeter += currentPowerConsumption;
-                    
+
                     // OPC UA PubSub JSON-encode data read
                     JsonEncoder encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true);
                     encoder.WriteString("MessageId", i.ToString());
@@ -145,7 +147,7 @@ namespace OpcUaPubSub
 
                     // send to MQTTv3 broker
                     var message = new MqttApplicationMessageBuilder()
-                        .WithAtLeastOnceQoS()
+                        .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
                         .WithTopic("devices/" + _clientName + "/messages/events/")
                         .WithContentType("application/json") // optional: sets `content-type` system property on message
                         .WithPayload(Encoding.UTF8.GetBytes(payload))
@@ -154,7 +156,7 @@ namespace OpcUaPubSub
                     var response = _client.PublishAsync(message).GetAwaiter().GetResult();
                     if (response.ReasonCode != MqttClientPublishReasonCode.Success)
                     {
-                        throw new Exception($"Failed to send telemetry event. Reason Code: {response.ReasonCode}; Status: {GetStatus(response.UserProperties)?.ToString("x4") ?? "-"}");
+                        throw new Exception($"Failed to send telemetry event. Reason Code: {response.ReasonCode}");
                     }
 
                     // publish once a second
