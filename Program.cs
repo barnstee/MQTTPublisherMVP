@@ -50,7 +50,7 @@ namespace OpcUaPubSub
         public static void Main()
         {
             // load our CSV data
-            List<string> lines = File.ReadLines(Path.Combine(Directory.GetCurrentDirectory(), "energy.csv")).ToList();
+            List<string> lines = File.ReadLines(Path.Combine(Directory.GetCurrentDirectory(), "energy2.csv")).ToList();
 
             // connect to broker
             Connect();
@@ -67,10 +67,9 @@ namespace OpcUaPubSub
                         i = 0;
                     }
 
-                    // our energy CSV is in 30 second internvals
                     try
                     {
-                        currentEnergyConsumption = double.Parse(lines[i]) / 30;
+                        currentEnergyConsumption = double.Parse(lines[i]);
                     }
                     catch (Exception)
                     {
@@ -83,7 +82,7 @@ namespace OpcUaPubSub
                     JsonEncoder encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true);
                     encoder.WriteString("MessageId", i.ToString());
                     encoder.WriteString("MessageType", "ua-data");
-                    encoder.WriteString("PublisherId", "GE");
+                    encoder.WriteString("PublisherId", "Festo");
                     encoder.PushArray("Messages");
                     encoder.PushStructure("");
                     encoder.WriteString("DataSetWriterId", "12345");
@@ -100,7 +99,7 @@ namespace OpcUaPubSub
                         Value = encoder.CloseAndReturnText()
                     };
 
-                    _producer.ProduceAsync("ge", message).GetAwaiter().GetResult();
+                    _producer.ProduceAsync("festo", message).GetAwaiter().GetResult();
 
                     // publish once a second
                     Task.Delay(1000).GetAwaiter().GetResult();

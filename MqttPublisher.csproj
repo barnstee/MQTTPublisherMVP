@@ -13,10 +13,14 @@
 
   <ItemGroup>
     <None Remove="energy.csv" />
+    <None Remove="energy2.csv" />
   </ItemGroup>
 
   <ItemGroup>
     <Content Include="energy.csv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="energy2.csv">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
