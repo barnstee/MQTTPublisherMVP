@@ -50,7 +50,7 @@ namespace OpcUaPubSub
         public static void Main()
         {
             // load our CSV data
-            List<string> lines = File.ReadLines(Path.Combine(Directory.GetCurrentDirectory(), "energy2.csv")).ToList();
+            List<string> lines = File.ReadLines(Path.Combine(Directory.GetCurrentDirectory(), "energy3.csv")).ToList();
             double energyMeter = 0;
             int i = 0;
 
@@ -84,7 +84,7 @@ namespace OpcUaPubSub
                         JsonEncoder encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true);
                         encoder.WriteString("MessageId", i.ToString());
                         encoder.WriteString("MessageType", "ua-data");
-                        encoder.WriteString("PublisherId", "Festo");
+                        encoder.WriteString("PublisherId", "MDZ");
                         encoder.PushArray("Messages");
                         encoder.PushStructure("");
                         encoder.WriteString("DataSetWriterId", "12345");
@@ -101,7 +101,7 @@ namespace OpcUaPubSub
                             Value = encoder.CloseAndReturnText()
                         };
 
-                        _producer.ProduceAsync("festo", message).GetAwaiter().GetResult();
+                        _producer.ProduceAsync("mdzhannover", message).GetAwaiter().GetResult();
 
                         // publish once a second
                         Task.Delay(1000).GetAwaiter().GetResult();
