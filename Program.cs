@@ -51,68 +51,68 @@ namespace OpcUaPubSub
         {
             // load our CSV data
             List<string> lines = File.ReadLines(Path.Combine(Directory.GetCurrentDirectory(), "energy2.csv")).ToList();
+            double energyMeter = 0;
+            int i = 0;
 
-            // connect to broker
-            Connect();
-
-            try
+            while (true)
             {
-                int i = 0;
-                double energyMeter = 0;
-                double currentEnergyConsumption = 0;
-                while (true)
+                // connect to broker
+                Connect();
+
+                try
                 {
-                    if (i == lines.Count)
+                    while (true)
                     {
-                        i = 0;
+                        if (i == lines.Count)
+                        {
+                            i = 0;
+                        }
+
+                        double currentEnergyConsumption = 0.0;
+                        try
+                        {
+                            currentEnergyConsumption = double.Parse(lines[i]);
+                        }
+                        catch (Exception)
+                        {
+                            // do nothing
+                        }
+
+                        energyMeter += currentEnergyConsumption;
+
+                        // OPC UA PubSub JSON-encode data read
+                        JsonEncoder encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true);
+                        encoder.WriteString("MessageId", i.ToString());
+                        encoder.WriteString("MessageType", "ua-data");
+                        encoder.WriteString("PublisherId", "Festo");
+                        encoder.PushArray("Messages");
+                        encoder.PushStructure("");
+                        encoder.WriteString("DataSetWriterId", "12345");
+                        encoder.WriteString("Timestamp", string.Format("{0:u}", DateTime.UtcNow));
+                        encoder.PushStructure("Payload");
+                        encoder.WriteVariant("Energy", energyMeter);
+                        encoder.PopStructure();
+                        encoder.PopStructure();
+                        encoder.PopArray();
+
+                        Message<Null, string> message = new()
+                        {
+                            Headers = new Headers() { { "Content-Type", Encoding.UTF8.GetBytes("application/json") } },
+                            Value = encoder.CloseAndReturnText()
+                        };
+
+                        _producer.ProduceAsync("festo", message).GetAwaiter().GetResult();
+
+                        // publish once a second
+                        Task.Delay(1000).GetAwaiter().GetResult();
+
+                        i++;
                     }
-
-                    try
-                    {
-                        currentEnergyConsumption = double.Parse(lines[i]);
-                    }
-                    catch (Exception)
-                    {
-                        // do nothing
-                    }
-
-                    energyMeter += currentEnergyConsumption;
-
-                    // OPC UA PubSub JSON-encode data read
-                    JsonEncoder encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true);
-                    encoder.WriteString("MessageId", i.ToString());
-                    encoder.WriteString("MessageType", "ua-data");
-                    encoder.WriteString("PublisherId", "Festo");
-                    encoder.PushArray("Messages");
-                    encoder.PushStructure("");
-                    encoder.WriteString("DataSetWriterId", "12345");
-                    encoder.WriteString("Timestamp", string.Format("{0:u}", DateTime.UtcNow));
-                    encoder.PushStructure("Payload");
-                    encoder.WriteVariant("Energy", energyMeter);
-                    encoder.PopStructure();
-                    encoder.PopStructure();
-                    encoder.PopArray();
-
-                    Message<Null, string> message = new()
-                    {
-                        Headers = new Headers() { { "Content-Type", Encoding.UTF8.GetBytes("application/json") } },
-                        Value = encoder.CloseAndReturnText()
-                    };
-
-                    _producer.ProduceAsync("festo", message).GetAwaiter().GetResult();
-
-                    // publish once a second
-                    Task.Delay(1000).GetAwaiter().GetResult();
-
-                    i++;
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Exception: " + ex.Message);
-
-                _producer.Flush();
-                _producer.Dispose();
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Exception: " + ex.Message);
+                }
             }
         }
     }
