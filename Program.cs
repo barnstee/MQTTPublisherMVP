@@ -1,10 +1,6 @@
 ﻿using MQTTnet;
 using MQTTnet.Adapter;
 using MQTTnet.Client;
-using MQTTnet.Client.Connecting;
-using MQTTnet.Client.Options;
-using MQTTnet.Client.Publishing;
-using MQTTnet.Client.Subscribing;
 using MQTTnet.Packets;
 using MQTTnet.Protocol;
 using Opc.Ua;
@@ -58,29 +54,32 @@ namespace OpcUaPubSub
 
             // create MQTTv5 client
             _client = new MqttFactory().CreateMqttClient();
-            _client.UseApplicationMessageReceivedHandler(msg => HandleMessageAsync(msg));
+            _client.ApplicationMessageReceivedAsync += msg => HandleMessageAsync(msg);
+
             var clientOptions = new MqttClientOptionsBuilder()
                 .WithTcpServer(opt => opt.NoDelay = true)
                 .WithClientId(clientName)
                 .WithTcpServer(brokerName, 8883)
                 .WithTls(new MqttClientOptionsBuilderTlsParameters { UseTls = true })
                 .WithProtocolVersion(MQTTnet.Formatter.MqttProtocolVersion.V500)
-                .WithUserProperty("host", brokerName) // normally it is not needed as SNI is added by most TLS implementations.  
+                .WithUserProperty("host", brokerName) // normally it is not needed as SNI is added by most TLS implementations.
                 .WithUserProperty("api-version", "2020-10-01-preview")
-                .WithCommunicationTimeout(TimeSpan.FromSeconds(30))
+                .WithTimeout(TimeSpan.FromSeconds(30))
                 .WithKeepAlivePeriod(TimeSpan.FromSeconds(300))
-                .WithCleanSession(false) // keep existing subscriptions 
+                .WithCleanSession(false) // keep existing subscriptions
                 .WithAuthentication("SAS", sas)
                 .WithUserProperty("sas-at", atString)
                 .WithUserProperty("sas-expiry", expiryString);
 
             // setup disconnection handling: print out details and allow process to close
             bool disconnected = false;
-            _client.UseDisconnectedHandler(disconnectArgs =>
+            _client.DisconnectedAsync += disconnectArgs =>
             {
                 Console.WriteLine($"Disconnected: {disconnectArgs.Reason}");
                 disconnected = true;
-            });
+
+                return Task.CompletedTask;
+            };
 
             try
             {
@@ -90,7 +89,7 @@ namespace OpcUaPubSub
                     var status = GetStatus(connectResult.UserProperties)?.ToString("x4");
                     throw new Exception($"Connect failed. Status: {connectResult.ResultCode}; status: {status}");
                 }
-                
+
                 var subscribeResult = _client.SubscribeAsync(
                     new MqttTopicFilter
                     {
@@ -99,7 +98,7 @@ namespace OpcUaPubSub
                     }).GetAwaiter().GetResult();
 
                 // make sure subscriptions were successful
-                if (subscribeResult.Items.Count != 1 || subscribeResult.Items[0].ResultCode != MqttClientSubscribeResultCode.GrantedQoS0)
+                if (subscribeResult.Items.Count != 1 || subscribeResult.Items.ElementAt(0).ResultCode != MqttClientSubscribeResultCode.GrantedQoS0)
                 {
                     throw new ApplicationException("Failed to subscribe");
                 }
@@ -115,7 +114,7 @@ namespace OpcUaPubSub
                     }
                 }
             }
-            
+
             // find endpoint on a local OPC UA server
             string serverEndpoint = "opc.tcp://localhost:50000"; // run this sample OPC UA server locally via: docker run -p 50000:50000 mcr.microsoft.com/iotedge/opc-plc --aa --ctb
             EndpointDescription endpointDescription = CoreClientUtils.SelectEndpoint(serverEndpoint, false);
@@ -168,7 +167,7 @@ namespace OpcUaPubSub
 
                     // send to MQTTv5 broker
                     var message = new MqttApplicationMessageBuilder()
-                        .WithAtLeastOnceQoS()
+                        .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
                         .WithTopic("$iothub/telemetry")
                         .WithContentType("application/json") // optional: sets `content-type` system property on message
                         .WithUserProperty("@myProperty", "my value") // optional: adds custom property `myProperty`
@@ -177,14 +176,6 @@ namespace OpcUaPubSub
                         .Build();
 
                     var response = _client.PublishAsync(message).GetAwaiter().GetResult();
-                    if (response.ReasonCode != MqttClientPublishReasonCode.Success)
-                    {
-                        throw new Exception($"Failed to send telemetry event. Reason Code: {response.ReasonCode}; Status: {GetStatus(response.UserProperties)?.ToString("x4") ?? "-"}");
-                    }
-                    else
-                    {
-                        Console.WriteLine("Sent: " + payload);
-                    }
 
                     Task.Delay(publishingInterval).GetAwaiter().GetResult();
                 }
@@ -222,7 +213,7 @@ namespace OpcUaPubSub
         }
 
         // handles all incoming messages
-        private static void HandleMessageAsync(MqttApplicationMessageReceivedEventArgs args)
+        private static Task HandleMessageAsync(MqttApplicationMessageReceivedEventArgs args)
         {
             var msg = args.ApplicationMessage;
             if (msg.Topic.StartsWith("$iothub/methods/"))
@@ -237,12 +228,14 @@ namespace OpcUaPubSub
             {
                 Console.WriteLine("Unknown topic received: " + msg.Topic);
             }
+
+            return Task.CompletedTask;
         }
 
         // handles direct method calls
         private static MqttApplicationMessage HandleMethod(MqttApplicationMessage message)
         {
-            Console.WriteLine($"Received method call:\ntopic:{message.Topic}\npayload as a string: {Encoding.UTF8.GetString(message.Payload)}");
+            Console.WriteLine($"Received method call:\ntopic:{message.Topic}\npayload as a string: {Encoding.UTF8.GetString(message.PayloadSegment)}");
             return new MqttApplicationMessageBuilder()
                 .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtMostOnce)
                 .WithTopic("$iothub/responses")
