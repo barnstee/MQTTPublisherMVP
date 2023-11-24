@@ -38,6 +38,7 @@ namespace OpcUaPubSub
             // create OPC UA cert validator
             app.ApplicationConfiguration.CertificateValidator = new CertificateValidator();
             app.ApplicationConfiguration.CertificateValidator.CertificateValidation += new CertificateValidationEventHandler(OPCUAServerCertificateValidationCallback);
+            app.ApplicationConfiguration.CertificateValidator.Update(app.ApplicationConfiguration.SecurityConfiguration).GetAwaiter().GetResult();
 
             string brokerName = "<TODO: Enter your Azure IoT Hub hostname in here, i.e. something.azure-devices.net";
             string clientName = "<TODO: Enter your Azure IoT device ID in here>";
